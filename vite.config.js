@@ -47,9 +47,9 @@ function createStorageProxy(prefix) {
 
 export default defineConfig(({ mode }) => {
   return {
-    base: mode === "development" ? "/" : "/mga/image-flow/",
+    base: mode === "development" ? "/" : "/img-zip/",
     build: {
-      outDir: "image-flow",
+      outDir: "docs",
     },
     plugins: [
       react(),
