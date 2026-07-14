@@ -11,7 +11,7 @@ import { loadCredentials, saveCredentials } from './lib/credentialVault'
 import { loadCompressionMode, saveCompressionMode } from './lib/compressionPreference'
 import { clearFolderHistory, loadFolderHistory, removeFolderFromHistory, saveFolderToHistory } from './lib/folderHistory'
 import { loadNamingPrefix, loadNamingStartIndex, saveNamingPrefix, saveNamingStartIndex } from './lib/namingPreference'
-import { buildObjectLinks, createObsClient, deleteObject, listObjects, parseObsFolder, renameObject, uploadObject } from './lib/obs'
+import { buildObjectLinks, createClient, deleteObject, listObjects, parseFolderUrl, renameObject, uploadObject } from './lib/storage'
 import { compressImage } from './lib/compress'
 import { copyToClipboard } from './utils/clipboard'
 import { createId } from './utils/id'
@@ -19,11 +19,14 @@ import { createId } from './utils/id'
 const MAX_PARALLEL_UPLOADS = 3
 
 const initialConfig = {
-  folderUrl: import.meta.env.VITE_DEFAULT_OBS_FOLDER || 'obs://breo-obs/mini-programs/activity/testFolder/',
+  provider: 'obs',
+  folderUrl: '',
   endpoint: import.meta.env.VITE_OBS_ENDPOINT || 'https://obs.cn-south-1.myhuaweicloud.com',
   accessKeyId: '',
   secretAccessKey: '',
 }
+
+const PROVIDER_NAMES = { obs: 'OBS', oss: 'OSS' }
 
 function App() {
   const [config, setConfig] = useState(initialConfig)
@@ -67,9 +70,9 @@ function App() {
 
         const restoredConfig = { ...initialConfig, ...saved }
         setConfig(restoredConfig)
-        const folder = parseObsFolder(restoredConfig.folderUrl)
-        const client = await createObsClient(restoredConfig)
-        const items = await listObjects(client, folder.bucket, folder.prefix)
+        const folder = parseFolderUrl(restoredConfig)
+        const client = await createClient(restoredConfig)
+        const items = await listObjects(client, restoredConfig, folder.bucket, folder.prefix)
         if (!mounted) return
 
         clientRef.current = client
@@ -78,7 +81,7 @@ function App() {
         setConnected(true)
         setActiveFolderUrl(restoredConfig.folderUrl.trim())
         setFolderHistory(saveFolderToHistory(restoredConfig.folderUrl))
-        setObjects(items.map((item) => ({ ...item, ...buildObjectLinks(restoredConfig.endpoint, folder.bucket, item.Key) })))
+        setObjects(items.map((item) => ({ ...item, ...buildObjectLinks(restoredConfig, folder.bucket, item.Key) })))
         setNotice(`已自动连接 ${folder.bucket}，读取到 ${items.length} 个文件`)
       } catch (error) {
         if (!mounted) return
@@ -138,20 +141,22 @@ function App() {
     setNotice('')
     setConfigError('')
     try {
+      const providerName = PROVIDER_NAMES[config.provider] || '云存储'
       if (!config.accessKeyId || !config.secretAccessKey) {
-        throw new Error('请填写 OBS Access Key ID 与 Secret Access Key')
+        throw new Error(`请填写 ${providerName} Access Key ID 与 Secret Access Key`)
       }
-      const folder = parseObsFolder(config.folderUrl)
-      const client = await createObsClient(config)
-      const items = await listObjects(client, folder.bucket, folder.prefix)
+      const folder = parseFolderUrl(config)
+      const client = await createClient(config)
+      const items = await listObjects(client, config, folder.bucket, folder.prefix)
       clientRef.current = client
       folderRef.current = folder
       activeConfigRef.current = { ...config }
       setConnected(true)
       setActiveFolderUrl(config.folderUrl.trim())
       setFolderHistory(saveFolderToHistory(config.folderUrl))
-      setObjects(items.map((item) => ({ ...item, ...buildObjectLinks(config.endpoint, folder.bucket, item.Key) })))
+      setObjects(items.map((item) => ({ ...item, ...buildObjectLinks(config, folder.bucket, item.Key) })))
       await saveCredentials({
+        provider: config.provider,
         folderUrl: config.folderUrl,
         endpoint: config.endpoint,
         accessKeyId: config.accessKeyId,
@@ -160,7 +165,7 @@ function App() {
       setNotice(`已连接 ${folder.bucket}，读取到 ${items.length} 个文件，凭据已保存`)
       setIsConfigOpen(false)
     } catch (error) {
-      const message = error.message || '连接 OBS 失败，请检查配置与跨域设置'
+      const message = error.message || '连接失败，请检查配置与跨域设置'
       setNotice(message)
       setConfigError(message)
     } finally {
@@ -172,8 +177,8 @@ function App() {
     if (!clientRef.current || !folderRef.current || !activeConfigRef.current) return
     setIsLoading(true)
     try {
-      const items = await listObjects(clientRef.current, folderRef.current.bucket, folderRef.current.prefix)
-      setObjects(items.map((item) => ({ ...item, ...buildObjectLinks(activeConfigRef.current.endpoint, folderRef.current.bucket, item.Key) })))
+      const items = await listObjects(clientRef.current, activeConfigRef.current, folderRef.current.bucket, folderRef.current.prefix)
+      setObjects(items.map((item) => ({ ...item, ...buildObjectLinks(activeConfigRef.current, folderRef.current.bucket, item.Key) })))
       setNotice(`目录已刷新，共 ${items.length} 个文件`)
     } catch (error) {
       setNotice(error.message || '刷新目录失败')
@@ -222,8 +227,8 @@ function App() {
       patchItem(item.id, { status: 'uploading', ...compressed })
 
       const key = `${folderRef.current.prefix}${item.name}`
-      await uploadObject(clientRef.current, folderRef.current.bucket, key, compressed.blob)
-      const links = buildObjectLinks(activeConfigRef.current.endpoint, folderRef.current.bucket, key)
+      await uploadObject(clientRef.current, activeConfigRef.current, folderRef.current.bucket, key, compressed.blob)
+      const links = buildObjectLinks(activeConfigRef.current, folderRef.current.bucket, key)
       patchItem(item.id, { status: 'success', key, ...links })
       setObjects((current) => [
         { Key: key, Size: compressed.compressedSize, LastModified: new Date().toISOString(), ...links },
@@ -314,7 +319,7 @@ function App() {
 
   async function renameFile(object, nextName) {
     if (!clientRef.current || !folderRef.current || !activeConfigRef.current) {
-      throw new Error('请先连接 OBS 目录')
+      throw new Error('请先连接云存储目录')
     }
 
     const cleanName = nextName.trim()
@@ -332,8 +337,8 @@ function App() {
 
     setRenamingKey(object.Key)
     try {
-      await renameObject(clientRef.current, folderRef.current.bucket, object.Key, nextKey)
-      const links = buildObjectLinks(activeConfigRef.current.endpoint, folderRef.current.bucket, nextKey)
+      await renameObject(clientRef.current, activeConfigRef.current, folderRef.current.bucket, object.Key, nextKey)
+      const links = buildObjectLinks(activeConfigRef.current, folderRef.current.bucket, nextKey)
       setObjects((current) => current.map((item) => (
         item.Key === object.Key
           ? { ...item, Key: nextKey, LastModified: new Date().toISOString(), ...links }
@@ -349,12 +354,12 @@ function App() {
 
   async function deleteFile(object) {
     if (!clientRef.current || !folderRef.current) {
-      throw new Error('请先连接 OBS 目录')
+      throw new Error('请先连接云存储目录')
     }
 
     setDeletingKey(object.Key)
     try {
-      await deleteObject(clientRef.current, folderRef.current.bucket, object.Key)
+      await deleteObject(clientRef.current, activeConfigRef.current, folderRef.current.bucket, object.Key)
       setObjects((current) => current.filter((item) => item.Key !== object.Key))
       setToast({ id: createId(), message: '文件已删除' })
       clearTimeout(toastTimerRef.current)
@@ -380,7 +385,12 @@ function App() {
       <div className="liquid-orb right-[3%] top-[20%] h-[430px] w-[430px] bg-violet-300/45" />
       <div className="liquid-orb bottom-[-8%] left-[35%] h-[470px] w-[470px] bg-blue-300/40" />
       <div className="relative mx-auto flex w-full max-w-[1900px] flex-col px-3 py-3 md:px-5 md:py-4 lg:h-full">
-        <AppHeader activeFolderUrl={activeFolderUrl} connected={connected} onOpenConfig={() => setIsConfigOpen(true)} />
+        <AppHeader
+          activeFolderUrl={activeFolderUrl}
+          connected={connected}
+          onOpenConfig={() => setIsConfigOpen(true)}
+          provider={config.provider}
+        />
 
         <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[390px_minmax(0,1fr)]">
           <aside className="flex min-h-0 flex-col gap-4 lg:overflow-hidden">

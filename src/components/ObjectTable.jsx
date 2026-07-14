@@ -357,7 +357,7 @@ export default function ObjectTable({
         </div>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center px-6 py-20 text-center">
-          <p className="text-sm font-medium text-slate-500">{connected ? "该目录暂时没有文件" : "尚未连接 OBS 目录"}</p>
+          <p className="text-sm font-medium text-slate-500">{connected ? "该目录暂时没有文件" : "尚未连接云存储目录"}</p>
           <p className="mt-2 text-sm text-slate-400">连接后，这里将以表格展示名称、大小、上传时间与地址</p>
         </div>
       )}

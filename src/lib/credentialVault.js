@@ -1,5 +1,5 @@
-const STORAGE_KEY = 'lanhu-assets.credentials.v4'
-const LEGACY_STORAGE_KEYS = ['lanhu-assets.credentials.v3', 'lanhu-assets.credentials.v2']
+const STORAGE_KEY = 'lanhu-assets.credentials.v5'
+const LEGACY_STORAGE_KEYS = ['lanhu-assets.credentials.v4', 'lanhu-assets.credentials.v3', 'lanhu-assets.credentials.v2']
 const CIPHER_KEY = 'obs-imageflow-credential-vault'
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -59,7 +59,8 @@ export async function saveCredentials(credentials) {
   localStorage.setItem(
     STORAGE_KEY,
     JSON.stringify({
-      version: 4,
+      version: 5,
+      provider: credentials.provider || 'obs',
       folderUrl: credentials.folderUrl,
       endpoint: credentials.endpoint,
       salt,
@@ -76,6 +77,7 @@ export async function loadCredentials() {
     try {
       const vault = JSON.parse(raw)
       return {
+        provider: vault.provider || 'obs',
         folderUrl: vault.folderUrl || '',
         endpoint: vault.endpoint || '',
         accessKeyId: decryptText(vault.accessKeyId, vault.salt),

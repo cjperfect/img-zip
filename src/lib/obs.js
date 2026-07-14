@@ -1,3 +1,5 @@
+import { registerProxyEndpoint } from './proxy'
+
 export function parseObsFolder(folderUrl) {
   const match = /^obs:\/\/([^/]+)\/?(.*)$/.exec(folderUrl.trim())
   if (!match) {
@@ -17,46 +19,17 @@ export async function createObsClient(config) {
     path_style: false,
   })
 
-  // 开发环境：拦截 SDK 的 XHR 请求，通过 Vite 代理转发绕过跨域限制
+  // 开发环境：通过共享代理拦截 SDK 的 XHR 请求绕过跨域限制
   if (import.meta.env.DEV) {
-    setupObsProxy(config.endpoint.trim())
+    const parsed = new URL(config.endpoint.trim())
+    registerProxyEndpoint({
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      proxyPrefix: '/api/obs-proxy/',
+    })
   }
 
   return client
-}
-
-const proxyUrlPrefix = '/api/obs-proxy/'
-let obsProxyEndpoint = null
-
-function setupObsProxy(endpoint) {
-  obsProxyEndpoint = new URL(endpoint)
-
-  if (XMLHttpRequest.prototype.open.__obsProxied) return
-  const originalOpen = XMLHttpRequest.prototype.open
-  XMLHttpRequest.prototype.open = function (method, url) {
-    if (obsProxyEndpoint && typeof url === 'string') {
-      try {
-        const reqUrl = new URL(url)
-        if (isObsEndpointRequest(reqUrl)) {
-          // 去掉默认端口（443/80），让代理 URL 更干净
-          let cleanOrigin = reqUrl.origin
-          if (reqUrl.port === '443' || reqUrl.port === '80') {
-            cleanOrigin = reqUrl.protocol + '//' + reqUrl.hostname
-          }
-          arguments[1] = proxyUrlPrefix + encodeURIComponent(cleanOrigin) + reqUrl.pathname + reqUrl.search
-        }
-      } catch {
-        // Let the original XHR handle unparseable SDK URLs.
-      }
-    }
-    return originalOpen.apply(this, arguments)
-  }
-  XMLHttpRequest.prototype.open.__obsProxied = true
-}
-
-function isObsEndpointRequest(reqUrl) {
-  return reqUrl.protocol === obsProxyEndpoint.protocol
-    && (reqUrl.hostname === obsProxyEndpoint.hostname || reqUrl.hostname.endsWith(`.${obsProxyEndpoint.hostname}`))
 }
 
 function request(client, method, params) {
